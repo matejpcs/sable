@@ -69,8 +69,8 @@ public abstract class ConnectionMixin implements ConnectionExtension {
 
     @Inject(method = "connect", at = @At("TAIL"))
     private static void sable$connect(final InetSocketAddress inetSocketAddress, final boolean bl, final Connection connection, final CallbackInfoReturnable<ChannelFuture> cir) {
-        if (SableConfig.DISABLE_UDP_PIPELINE.get()) {
-            Sable.LOGGER.debug("[sable-udp] client UDP pipeline disabled via config; skipping bootstrap for {}", inetSocketAddress);
+        if (SableConfig.DISABLE_UDP_PIPELINE.get() || !SableConfig.ATTEMPT_UDP_NETWORKING.get()) {
+            Sable.LOGGER.debug("[sable-udp] client UDP networking disabled via config; skipping bootstrap for {}", inetSocketAddress);
             return;
         }
 
@@ -134,7 +134,7 @@ public abstract class ConnectionMixin implements ConnectionExtension {
     @Inject(method = "connectToLocalServer", at = @At("TAIL"))
     private static void sable$connectToLocalServer(final SocketAddress socketAddress, final CallbackInfoReturnable<Connection> cir, @Local final Connection connection) {
         if (SableConfig.DISABLE_UDP_PIPELINE.get()) {
-            Sable.LOGGER.debug("[sable-udp] local UDP pipeline disabled via config; skipping bootstrap for {}", socketAddress);
+            Sable.LOGGER.debug("[sable-udp] local UDP networking disabled via config; skipping bootstrap for {}", socketAddress);
             return;
         }
 

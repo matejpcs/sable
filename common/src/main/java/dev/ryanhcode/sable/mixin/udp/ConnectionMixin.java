@@ -92,7 +92,7 @@ public abstract class ConnectionMixin implements ConnectionExtension {
          * stack on affected Windows machines. Therefore the whole bootstrap call,
          * not merely its completion wait, must stay off the Minecraft login thread.
          */
-        Sable$UDP_BOOTSTRAP_EXECUTOR.execute(() -> {
+        sable$udpBootstrapExecutor.execute(() -> {
             final long startNs = System.nanoTime();
 
             Sable.LOGGER.info("Starting remote client UDP channel future (remote={}, transport={})",
@@ -138,7 +138,7 @@ public abstract class ConnectionMixin implements ConnectionExtension {
             return;
         }
 
-        Sable$UDP_BOOTSTRAP_EXECUTOR.execute(() -> {
+        sable$udpBootstrapExecutor.execute(() -> {
             final long startNs = System.nanoTime();
 
             try {

@@ -25,21 +25,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CompletableFuture;
 
 @Mixin(Connection.class)
 public abstract class ConnectionMixin implements ConnectionExtension {
 
     @Unique
     private Channel sable$udpChannel = null;
-
-    @Unique
-    private static final ExecutorService sable$udpBootstrapExecutor = Executors.newCachedThreadPool(runnable -> {
-        final Thread thread = new Thread(runnable, "Sable UDP Bootstrap");
-        thread.setDaemon(true);
-        return thread;
-    });
 
     @Override
     public void sable$setUDPChannel(final Channel channel) {
@@ -92,7 +84,7 @@ public abstract class ConnectionMixin implements ConnectionExtension {
          * stack on affected Windows machines. Therefore the whole bootstrap call,
          * not merely its completion wait, must stay off the Minecraft login thread.
          */
-        sable$udpBootstrapExecutor.execute(() -> {
+        CompletableFuture.runAsync(() -> {
             final long startNs = System.nanoTime();
 
             Sable.LOGGER.info("Starting remote client UDP channel future (remote={}, transport={})",

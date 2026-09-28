@@ -30,6 +30,13 @@ public class SableUDPChannelHandlerClient extends SimpleChannelInboundHandler<Ad
     @Override
     public void channelActive(final ChannelHandlerContext ctx) throws Exception {
         super.channelActive(ctx);
+
+        if (!this.connection.isConnected()) {
+            Sable.LOGGER.debug("[sable-udp] UDP bootstrap completed after Minecraft connection closed; closing channel");
+            ctx.close();
+            return;
+        }
+
         Sable.LOGGER.debug("[sable-udp] Client UDP channel active");
 
         this.channel = ctx.channel();

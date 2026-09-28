@@ -35,7 +35,7 @@ public abstract class ConnectionMixin implements ConnectionExtension {
     private Channel sable$udpChannel = null;
 
     @Unique
-    private static final ExecutorService SABLE$UDP_BOOTSTRAP_EXECUTOR = Executors.newCachedThreadPool(runnable -> {
+    private static final ExecutorService sable$udpBootstrapExecutor = Executors.newCachedThreadPool(runnable -> {
         final Thread thread = new Thread(runnable, "Sable UDP Bootstrap");
         thread.setDaemon(true);
         return thread;

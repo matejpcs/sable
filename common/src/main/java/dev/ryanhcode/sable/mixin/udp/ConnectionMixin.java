@@ -3,6 +3,7 @@ package dev.ryanhcode.sable.mixin.udp;
 import com.llamalad7.mixinextras.sugar.Local;
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.SableClient;
+import dev.ryanhcode.sable.SableConfig;
 import dev.ryanhcode.sable.mixinterface.udp.ConnectionExtension;
 import dev.ryanhcode.sable.network.udp.SableUDPPacket;
 import dev.ryanhcode.sable.network.udp.handler.SableUDPChannelHandlerClient;
@@ -24,6 +25,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.concurrent.CompletableFuture;
 
 @Mixin(Connection.class)
 public abstract class ConnectionMixin implements ConnectionExtension {
@@ -44,9 +46,9 @@ public abstract class ConnectionMixin implements ConnectionExtension {
 
             channel.close().awaitUninterruptibly().addListener((x) -> {
                 if (x.isSuccess()) {
-                    Sable.LOGGER.info("Closed UDP channel!");
+                    Sable.LOGGER.debug("[sable-udp] Closed UDP channel");
                 } else {
-                    Sable.LOGGER.info("Failed to close UDP channel", x.cause());
+                    Sable.LOGGER.warn("[sable-udp] Failed to close UDP channel", x.cause());
                 }
             });
         }
@@ -59,6 +61,11 @@ public abstract class ConnectionMixin implements ConnectionExtension {
 
     @Inject(method = "connect", at = @At("TAIL"))
     private static void sable$connect(final InetSocketAddress inetSocketAddress, final boolean bl, final Connection connection, final CallbackInfoReturnable<ChannelFuture> cir) {
+        if (SableConfig.DISABLE_UDP_PIPELINE.get() || !SableConfig.ATTEMPT_UDP_NETWORKING.get()) {
+            Sable.LOGGER.debug("[sable-udp] client UDP networking disabled via config; skipping bootstrap for {}", inetSocketAddress);
+            return;
+        }
+
         final boolean useNativeTransport = SableClient.useNativeTransport();
 
         final Class<? extends Channel> channelClass;
@@ -72,35 +79,91 @@ public abstract class ConnectionMixin implements ConnectionExtension {
             eventLoopGroup = Connection.NETWORK_WORKER_GROUP.get();
         }
 
-        Sable.LOGGER.info("Starting remote client UDP channel future");
+        /*
+         * IMPORTANT: Bootstrap.connect() itself can block inside the OS networking
+         * stack on affected Windows machines. Therefore the whole bootstrap call,
+         * not merely its completion wait, must stay off the Minecraft login thread.
+         */
+        CompletableFuture.runAsync(() -> {
+            final long startNs = System.nanoTime();
 
-        final ChannelFuture channelFuture = new Bootstrap().group(eventLoopGroup).handler(new ChannelInitializer<>() {
-                    @Override
-                    protected void initChannel(final Channel channel) {
-                        channel.config().setOption(ChannelOption.SO_KEEPALIVE, true);
-                        SableUDPPacket.configureSerialization(channel.pipeline(), PacketFlow.CLIENTBOUND, false, null);
-                        sable$setupChannel(channel, connection);
+            Sable.LOGGER.info("Starting remote client UDP channel future (remote={}, transport={})",
+                    inetSocketAddress, channelClass.getSimpleName());
+
+            try {
+                final ChannelFuture channelFuture = new Bootstrap()
+                        .group(eventLoopGroup)
+                        .handler(new ChannelInitializer<>() {
+                            @Override
+                            protected void initChannel(final Channel channel) {
+                                channel.config().setOption(ChannelOption.SO_KEEPALIVE, true);
+                                SableUDPPacket.configureSerialization(channel.pipeline(), PacketFlow.CLIENTBOUND, false, null);
+                                sable$setupChannel(channel, connection);
+                            }
+                        })
+                        .channel(channelClass)
+                        .connect(inetSocketAddress.getAddress(), inetSocketAddress.getPort());
+
+                channelFuture.addListener((ChannelFutureListener) future -> {
+                    final long elapsedMs = (System.nanoTime() - startNs) / 1_000_000L;
+
+                    if (future.isSuccess()) {
+                        Sable.LOGGER.debug("[sable-udp] UDP connect completed for {} (elapsedMs={})", inetSocketAddress, elapsedMs);
+                    } else if (!future.isCancelled()) {
+                        Sable.LOGGER.warn("[sable-udp] UDP connect failed for {} (elapsedMs={}): {}",
+                                inetSocketAddress,
+                                elapsedMs,
+                                future.cause() != null ? future.cause().toString() : "<no cause>");
                     }
-                })
-                .channel(channelClass)
-                .connect(inetSocketAddress.getAddress(), inetSocketAddress.getPort());
-
-        channelFuture.syncUninterruptibly();
+                });
+            } catch (final Throwable t) {
+                Sable.LOGGER.error("[sable-udp] Bootstrap.connect threw for {} (elapsedMs={}); continuing without UDP",
+                        inetSocketAddress, (System.nanoTime() - startNs) / 1_000_000L, t);
+            }
+        });
     }
 
     @Inject(method = "connectToLocalServer", at = @At("TAIL"))
     private static void sable$connectToLocalServer(final SocketAddress socketAddress, final CallbackInfoReturnable<Connection> cir, @Local final Connection connection) {
-        Sable.LOGGER.info("Starting local client UDP channel future");
+        if (SableConfig.DISABLE_UDP_PIPELINE.get() || !SableConfig.ATTEMPT_UDP_NETWORKING.get()) {
+            Sable.LOGGER.debug("[sable-udp] local UDP networking disabled via config; skipping bootstrap for {}", socketAddress);
+            return;
+        }
 
-        final ChannelFuture channelFuture = new Bootstrap().group(Connection.LOCAL_WORKER_GROUP.get()).handler(new ChannelInitializer<>() {
-            @Override
-            protected void initChannel(final Channel channel) {
-                SableUDPPacket.configureInMemoryPipeline(channel.pipeline(), PacketFlow.CLIENTBOUND);
-                sable$setupChannel(channel, connection);
+        CompletableFuture.runAsync(() -> {
+            final long startNs = System.nanoTime();
+
+            try {
+                final ChannelFuture channelFuture = new Bootstrap()
+                        .group(Connection.LOCAL_WORKER_GROUP.get())
+                        .handler(new ChannelInitializer<>() {
+                            @Override
+                            protected void initChannel(final Channel channel) {
+                                SableUDPPacket.configureInMemoryPipeline(channel.pipeline(), PacketFlow.CLIENTBOUND);
+                                sable$setupChannel(channel, connection);
+                            }
+                        })
+                        .channel(LocalChannel.class)
+                        .connect(socketAddress);
+
+                channelFuture.addListener((ChannelFutureListener) future -> {
+                    final long elapsedMs = (System.nanoTime() - startNs) / 1_000_000L;
+
+                    if (future.isSuccess()) {
+                        Sable.LOGGER.debug("[sable-udp] local UDP connect completed for {} (elapsedMs={})",
+                                socketAddress, elapsedMs);
+                    } else if (!future.isCancelled()) {
+                        Sable.LOGGER.warn("[sable-udp] local UDP connect failed for {} (elapsedMs={}): {}",
+                                socketAddress,
+                                elapsedMs,
+                                future.cause() != null ? future.cause().toString() : "<no cause>");
+                    }
+                });
+            } catch (final Throwable t) {
+                Sable.LOGGER.error("[sable-udp] local Bootstrap.connect threw for {} (elapsedMs={}); continuing without UDP",
+                        socketAddress, (System.nanoTime() - startNs) / 1_000_000L, t);
             }
-        }).channel(LocalChannel.class).connect(socketAddress).syncUninterruptibly();
-
-        channelFuture.syncUninterruptibly();
+        });
     }
 
     @Unique

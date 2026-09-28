@@ -125,12 +125,12 @@ public abstract class ConnectionMixin implements ConnectionExtension {
 
     @Inject(method = "connectToLocalServer", at = @At("TAIL"))
     private static void sable$connectToLocalServer(final SocketAddress socketAddress, final CallbackInfoReturnable<Connection> cir, @Local final Connection connection) {
-        if (SableConfig.DISABLE_UDP_PIPELINE.get()) {
+        if (SableConfig.DISABLE_UDP_PIPELINE.get() || !SableConfig.ATTEMPT_UDP_NETWORKING.get()) {
             Sable.LOGGER.debug("[sable-udp] local UDP networking disabled via config; skipping bootstrap for {}", socketAddress);
             return;
         }
 
-        sable$udpBootstrapExecutor.execute(() -> {
+        CompletableFuture.runAsync(() -> {
             final long startNs = System.nanoTime();
 
             try {
